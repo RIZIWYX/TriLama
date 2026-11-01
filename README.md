@@ -16,9 +16,9 @@ dans le dossier « Candidatures stage », et je reçois chaque soir un récapitu
 
 ## Démonstration
 
-https://github.com/RIZIWYX/TriLama/raw/main/docs/demo.mp4
+![Démo : un refus arrive, TriLama le classe, l'étiquette et le range](docs/demo.gif)
 
-[▶ Voir la vidéo de démonstration](docs/demo.mp4)
+[▶ Vidéo en haute qualité (MP4)](docs/demo.mp4)
 
 Un mail de refus arrive, TriLama le classe en quelques secondes, lui pose l'étiquette
 **Stage - Refus** et le range dans **Candidatures stage**.
