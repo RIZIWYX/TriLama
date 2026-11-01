@@ -16,7 +16,9 @@ dans le dossier « Candidatures stage », et je reçois chaque soir un récapitu
 
 ## Démonstration
 
-![Démonstration de TriLama](docs/demo.gif)
+https://github.com/RIZIWYX/TriLama/raw/main/docs/demo.mp4
+
+[▶ Voir la vidéo de démonstration](docs/demo.mp4)
 
 Un mail de refus arrive, TriLama le classe en quelques secondes, lui pose l'étiquette
 **Stage - Refus** et le range dans **Candidatures stage**.
@@ -100,6 +102,11 @@ sans rien modifier, avant de passer à `false`.
 - **Secrets hors du dépôt** : identifiants dans `.env`, exclu par `.gitignore`.
 - **Modifications ciblées** : seul le mail traité est déplacé (`MOVE` IMAP, ou `UID EXPUNGE`) ; aucune suppression globale.
 - **Boucle évitée** : les récapitulatifs envoyés par TriLama sont reconnus et ignorés.
+
+## Vidéo de démonstration
+
+`bash demo/lancer-demo.sh` enregistre la démo dans le webmail avec Playwright
+(envoi d'un faux refus, attente du tri, affichage du mail étiqueté) et produit `docs/demo.mp4`.
 
 ## Choix techniques
 

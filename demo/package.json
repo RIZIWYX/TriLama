@@ -1,0 +1,9 @@
+{
+  "name": "trilama-demo",
+  "private": true,
+  "type": "module",
+  "description": "Enregistre la vidéo de démonstration de TriLama dans le webmail",
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
