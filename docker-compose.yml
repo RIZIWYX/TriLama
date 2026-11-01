@@ -1,0 +1,21 @@
+services:
+  ollama:
+    image: ollama/ollama:0.5.7
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # Pas de port exposé : seul le service triage y accède.
+
+  triage:
+    build: ./triage
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      - ./data:/data
+    depends_on:
+      - ollama
+
+volumes:
+  ollama:
