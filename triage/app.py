@@ -1,7 +1,8 @@
 """Tri automatique des réponses de candidature de stage.
 
 Lit les nouveaux mails en IMAP, les classe avec un modèle local (Ollama),
-les déplace dans le dossier "Stage - ..." correspondant et envoie un récapitulatif.
+leur pose l'étiquette "Stage - ..." (mot-clé IMAP), les range dans un dossier
+et envoie un récapitulatif quotidien.
 Bibliothèque standard uniquement.
 """
 import email
