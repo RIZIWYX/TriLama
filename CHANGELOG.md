@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.0 - 2026-11-02
+
+- Vérification optionnelle de chaque mail par le détecteur de phishing phishdetect (service Docker `phishdetect`, profil `phishing`).
+- Un mail suspect reçoit l'étiquette « Phishing suspect » (`$phishingsuspect`), n'est ni classé ni rangé, et apparaît en tête du récapitulatif.
+- Une alerte exige la confirmation du LLM : le modèle classique seul jugeait suspects les mails de recruteurs en français.
+- Si le détecteur est indisponible, le tri continue sans vérification.
+
 ## v1.0.0 - 2026-11-01
 
 Première version.

@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     volumes:
       - ollama:/root/.ollama
-    # Pas de port exposé : seul le service triage y accède.
+    # Pas de port exposé : seuls les services internes y accèdent.
 
   triage:
     build: ./triage
@@ -16,6 +16,21 @@ services:
       - ./data:/data
     depends_on:
       - ollama
+
+  # Détecteur de phishing (optionnel) : activé avec COMPOSE_PROFILES=phishing dans .env
+  # Code : https://github.com/RIZIWYX/PhishingDetect, cloné à côté de ce dossier par défaut.
+  phishdetect:
+    profiles: [phishing]
+    build: ${PHISHDETECT_DIR:-../phishdetect}
+    restart: unless-stopped
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+    volumes:
+      - ${PHISHDETECT_DIR:-../phishdetect}/models:/app/models:ro
+    depends_on:
+      - ollama
+    # Pas de port exposé : seul triage l'appelle (http://phishdetect:8000).
 
 volumes:
   ollama:

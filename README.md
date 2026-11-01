@@ -32,16 +32,20 @@ triage-1  | UID 2633 -> refus (1.00) : Votre candidature au poste de stagiaire d
 
 ```
           IMAP (lecture)                     HTTP (réseau Docker interne)
-Webmail  ───────────────►  triage (Python)  ──────────────────────────►  Ollama
-(Dovecot)                        │           ◄──────────────────────────  qwen2.5:3b
-   ▲                             │             {"categorie": "refus", ...}
-   │   étiquette + rangement     │
+Webmail  ───────────────►  triage (Python)  ──────────────────────────►  phishdetect (optionnel)
+(Dovecot)                        │           ◄──────────────────────────  {"phishing": false, ...}
+   ▲                             │                                              │ confirmation
+   │                             │                                              ▼ si suspect
+   │                             ├──────────────────────────────────────►  Ollama
+   │                             │           ◄──────────────────────────  qwen2.5:3b
+   │   étiquette + rangement     │             {"categorie": "refus", ...}
    └─────────────────────────────┤
                                  │  SMTP, chaque soir à 20 h
                                  └───────────────────────────►  RECAP CANDIDATURE DU JOUR
 ```
 
 1. Toutes les 5 minutes, `triage` relève les nouveaux mails en IMAP (sans les marquer comme lus).
+   Si le détecteur est activé, chaque mail est d'abord vérifié : un mail suspect est étiqueté et s'arrête là.
 2. L'expéditeur, l'objet et le corps sont envoyés à Ollama avec une consigne de classement.
    Le modèle répond en JSON imposé, à température 0 pour des résultats stables.
 3. Selon la catégorie, `triage` pose l'étiquette (mot-clé IMAP) et déplace le mail.
@@ -57,6 +61,7 @@ Ollama n'a jamais accès à la boîte mail : il ne voit que le texte que `triage
 | Auto | « nous avons bien reçu votre candidature » | Stage - Auto (`$stageauto`) |
 | Attente | réponse humaine sans décision | Stage - Attente (`$stageattente`) |
 | Autre | cours, scolarité, newsletters… | aucune, le mail n'est pas touché |
+| Phishing suspect | faux recruteur, demande d'identifiants | Phishing suspect (`$phishingsuspect`), laissé dans la boîte |
 
 ## Installation
 
@@ -78,6 +83,30 @@ Au premier démarrage, le modèle (environ 2 Go) est téléchargé. Seuls les ma
 Laisser `DRY_RUN=true` quelques jours permet de vérifier les classements dans les logs
 sans rien modifier, avant de passer à `false`.
 
+## Détection du phishing (optionnelle)
+
+Un faux recruteur qui demande de « se connecter pour confirmer sa candidature » est un piège
+classique quand on cherche un stage. TriLama peut faire vérifier chaque mail par
+[phishdetect](https://github.com/RIZIWYX/PhishingDetect), mon détecteur de phishing
+(TF-IDF + régression logistique en filtre rapide, puis confirmation obligatoire par le LLM local avant toute alerte).
+
+Un mail jugé suspect reçoit l'étiquette **Phishing suspect**, il **n'est ni classé ni rangé**
+(un faux recruteur ne doit pas finir en « Stage - Positif »), et il apparaît en tête du
+récapitulatif avec la mention « NE PAS CLIQUER ». Si le détecteur est arrêté ou en panne,
+TriLama trie normalement, sans vérification.
+
+```bash
+# à côté du dossier TriLama
+git clone https://github.com/RIZIWYX/PhishingDetect.git ../phishdetect
+# entraîner le modèle une fois (voir le README de phishdetect) -> ../phishdetect/models/
+# dans .env : COMPOSE_PROFILES=phishing et PHISHDETECT_URL=http://phishdetect:8000
+docker compose up -d --build
+```
+
+Le service `phishdetect` n'expose aucun port : seul `triage` l'appelle sur le réseau Docker interne,
+et il réutilise le même conteneur Ollama. Créer dans le webmail une étiquette « Phishing suspect »
+associée au mot-clé `$phishingsuspect`.
+
 ## Configuration
 
 | Variable | Rôle | Défaut |
@@ -93,12 +122,16 @@ sans rien modifier, avant de passer à `false`.
 | `POLL_SECONDS` | Intervalle entre deux relèves | `300` |
 | `RECAP_HOUR` | Heure du récapitulatif (heure locale) | `20` |
 | `DRY_RUN` | Classer sans rien modifier | `true` |
+| `COMPOSE_PROFILES` | `phishing` pour lancer le détecteur | vide |
+| `PHISHDETECT_DIR` | Dossier du projet phishdetect | `../phishdetect` |
+| `PHISHDETECT_URL` | Adresse du détecteur, vide pour désactiver | vide |
 
 ## Sécurité et vie privée
 
 - **Traitement local** : aucun contenu de mail n'est envoyé à un service tiers.
 - **Surface réduite** : Ollama n'expose aucun port sur l'hôte, il n'est joignable que depuis le réseau Docker interne.
-- **Moindre privilège** : le service `triage` tourne avec un utilisateur non root.
+- **Moindre privilège** : les services `triage` et `phishdetect` tournent avec un utilisateur non root.
+- **Anti-phishing** : les mails suspects sont signalés avant qu'on clique, et jamais rangés avec les vraies réponses.
 - **Secrets hors du dépôt** : identifiants dans `.env`, exclu par `.gitignore`.
 - **Modifications ciblées** : seul le mail traité est déplacé (`MOVE` IMAP, ou `UID EXPUNGE`) ; aucune suppression globale.
 - **Boucle évitée** : les récapitulatifs envoyés par TriLama sont reconnus et ignorés.
@@ -110,7 +143,7 @@ sans rien modifier, avant de passer à `false`.
 
 ## Choix techniques
 
-- **Bibliothèque standard Python uniquement** (`imaplib`, `smtplib`, `urllib`, `zoneinfo`) : pas de dépendance à maintenir.
+- **Bibliothèque standard Python uniquement** pour `triage` (`imaplib`, `smtplib`, `urllib`, `zoneinfo`) : pas de dépendance à maintenir. Le détecteur, séparé, a ses propres dépendances (scikit-learn, FastAPI).
 - **État persistant** (`data/state.json`) : dernier mail traité et réponses du jour, donc ni doublon ni perte après un redémarrage.
 - **Reprise sur erreur** : si le modèle échoue, le mail est retenté au cycle suivant.
 - **Redémarrage automatique** des conteneurs (`restart: unless-stopped`).
@@ -119,8 +152,12 @@ sans rien modifier, avant de passer à `false`.
 
 - Un petit modèle peut se tromper sur des cas ambigus ; le mode `DRY_RUN` sert à le vérifier.
 - Le tri ne fonctionne que lorsque la machine est allumée.
+- Détecteur de phishing : son modèle classique a appris sur des mails anglais et juge suspect presque tout mail français,
+  d'où la confirmation obligatoire par le LLM, qui prend 20 à 30 s par mail suspect sur CPU.
+  Un vrai mail mal jugé ne serait pas classé, mais il apparaît en tête du récapitulatif.
 - Pistes : tests unitaires sur un jeu de mails annotés, intégration continue (GitHub Actions),
-  seuil de confiance minimal, accélération GPU optionnelle.
+  seuil de confiance minimal, accélération GPU optionnelle,
+  réentraînement du détecteur sur des mails en français.
 
 ## Auteur
 

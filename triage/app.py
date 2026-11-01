@@ -2,7 +2,8 @@
 
 Lit les nouveaux mails en IMAP, les classe avec un modèle local (Ollama),
 leur pose l'étiquette "Stage - ..." (mot-clé IMAP), les range dans un dossier
-et envoie un récapitulatif quotidien.
+et envoie un récapitulatif quotidien. Si le service phishdetect est actif, chaque
+mail est d'abord vérifié : un mail suspect est signalé et n'est pas trié.
 Bibliothèque standard uniquement.
 """
 import email
@@ -38,6 +39,8 @@ KEYWORDS = {
     "auto": "$stageauto",
     "attente": "$stageattente",
 }
+PHISH_LABEL = "Phishing suspect"
+PHISH_KEYWORD = "$phishingsuspect"
 
 PROMPT = """Tu tries les mails reçus par un étudiant qui cherche un stage.
 Réponds UNIQUEMENT en JSON : {{"categorie": "...", "confiance": 0.0-1.0, "resume": "une phrase"}}
@@ -89,6 +92,27 @@ def classify(sender, subject, body):
             float(out.get("confiance", 0)), out.get("resume", ""))
 
 
+def check_phishing(sender, subject, body):
+    """Interroge phishdetect. Renvoie le verdict (dict) ou None s'il est désactivé ou en panne.
+
+    Une panne du détecteur ne doit jamais bloquer le tri : on continue sans lui.
+    """
+    url = E.get("PHISHDETECT_URL", "").rstrip("/")
+    if not url:
+        return None
+    req = urllib.request.Request(
+        f"{url}/predict",
+        data=json.dumps({"sender": sender, "subject": subject, "body": body[:8000]}).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        # jusqu'à ~30 s quand le LLM est consulté en second avis
+        with urllib.request.urlopen(req, timeout=180) as r:
+            return json.loads(r.read())
+    except (OSError, ValueError) as exc:
+        print(f"phishdetect indisponible ({exc}), tri sans vérification")
+        return None
+
+
 def ensure_model():
     req = urllib.request.Request(
         f"{E['OLLAMA_URL']}/api/pull",
@@ -130,6 +154,8 @@ def move(imap, uid):
 
 
 def send_recap(results, day):
+    # les mails suspects en premier
+    results = sorted(results, key=lambda r: r[0] != PHISH_LABEL)
     if results:
         lines = [f"[{label}] {subject} - {sender}\n   {resume} (confiance {conf:.0%})"
                  for label, subject, sender, resume, conf in results]
@@ -171,8 +197,20 @@ def run_once(state):
             state["last_uid"] = uid
             save_state(state)
             continue
+        body = text_body(msg)
+        verdict = check_phishing(sender, subject, body)
+        if verdict and verdict.get("phishing"):
+            score = float(verdict.get("llm_score", verdict.get("score", 0)))
+            why = verdict.get("reason") or f"modèle {verdict.get('source', '?')}"
+            print(f"UID {uid} -> PHISHING SUSPECT ({score:.2f}) : {subject}")
+            if not dry:  # étiqueté mais laissé dans la boîte de réception, jamais rangé
+                imap.uid("store", str(uid), "+FLAGS", f"({PHISH_KEYWORD})")
+            results.append([PHISH_LABEL, subject, sender, f"NE PAS CLIQUER - {why}", score])
+            state["last_uid"] = uid
+            save_state(state)
+            continue
         try:
-            cat, conf, resume = classify(sender, subject, text_body(msg))
+            cat, conf, resume = classify(sender, subject, body)
         except Exception as exc:
             print(f"UID {uid} : échec de classification ({exc}), réessai plus tard")
             break
