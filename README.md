@@ -1,8 +1,8 @@
-# Tri automatique des réponses de candidature
+# TriLama - tri automatique des réponses de candidature
 
 Un service auto-hébergé qui surveille ma boîte mail universitaire, classe les réponses
-à mes candidatures de stage avec un modèle d'IA **local** (Ollama), les range dans le bon
-dossier et m'envoie un mail récapitulatif.
+à mes candidatures de stage avec un modèle d'IA **local** (Ollama), pose la bonne
+étiquette et m'envoie un mail récapitulatif.
 
 **Aucun mail ne quitte la machine** : le modèle tourne en local, sans API externe.
 
@@ -11,11 +11,12 @@ dossier et m'envoie un mail récapitulatif.
 ```
 IMAP (boîte univ) -> triage (Python) -> Ollama (qwen2.5:3b, local)
                          |
-                         +-> déplacement dans "Candidatures stage/Stage - ..."
+                         +-> étiquette "Stage - ..." (mot-clé IMAP, ex. $stagerefus)
+                         +-> rangement dans le dossier "Candidatures stage"
                          +-> mail récapitulatif (SMTP)
 ```
 
-| Catégorie | Dossier |
+| Catégorie | Étiquette |
 |---|---|
 | Refus | Stage - Refus |
 | Entretien / proposition | Stage - Positif |

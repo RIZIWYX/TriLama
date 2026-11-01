@@ -114,16 +114,18 @@ def save_state(state):
         json.dump(state, f)
 
 
-def folder(imap, label):
-    sep = "/"
-    typ, data = imap.list()
-    if typ == "OK" and data and data[0]:
-        m = re.search(rb'\(.*?\) "(.)"', data[0])
-        if m:
-            sep = m.group(1).decode()
-    name = f"{E['FOLDER_PARENT']}{sep}{label}"
-    imap.create(f'"{name}"')  # sans effet s'il existe déjà
-    return f'"{name}"'
+def move(imap, uid):
+    """Déplace le mail dans FOLDER_PARENT (créé s'il n'existe pas)."""
+    target = f'"{E["FOLDER_PARENT"]}"'
+    imap.create(target)  # sans effet s'il existe déjà
+    if "MOVE" in imap.capabilities:
+        return imap.uid("move", str(uid), target)[0] == "OK"
+    # Repli : copie puis suppression de ce seul mail (UID EXPUNGE)
+    if imap.uid("copy", str(uid), target)[0] != "OK":
+        return False
+    imap.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
+    imap.uid("expunge", str(uid))
+    return True
 
 
 def send_recap(results, day):
@@ -178,15 +180,11 @@ def run_once(state):
             label = CATEGORIES[cat]
             if not dry:
                 imap.uid("store", str(uid), "+FLAGS", f"({KEYWORDS[cat]})")
-                if E.get("MOVE_TO_FOLDER", "false").lower() == "true":
-                    target = folder(imap, label)
-                    if imap.uid("copy", str(uid), target)[0] == "OK":
-                        imap.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
+                if E.get("MOVE_TO_FOLDER", "false").lower() == "true" and not move(imap, uid):
+                    print(f"UID {uid} : déplacement impossible")
             results.append([label, subject, sender, resume, conf])
         state["last_uid"] = uid
         save_state(state)
-    if not dry:
-        imap.expunge()
     imap.logout()
     now = datetime.now(TZ)
     today = now.date().isoformat()
