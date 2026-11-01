@@ -29,6 +29,14 @@ CATEGORIES = {
     "auto": "Stage - Auto",
     "attente": "Stage - Attente",
 }
+# Mots-clés IMAP des étiquettes du webmail (Dovecot)
+KEYWORDS = {
+    "refus": "$stagerefus",
+    "positif": "$stagepositif",
+    "relance": "$stagerelance",
+    "auto": "$stageauto",
+    "attente": "$stageattente",
+}
 
 PROMPT = """Tu tries les mails reçus par un étudiant qui cherche un stage.
 Réponds UNIQUEMENT en JSON : {{"categorie": "...", "confiance": 0.0-1.0, "resume": "une phrase"}}
@@ -127,7 +135,7 @@ def send_recap(results, day):
         body = f"Aucune nouvelle réponse de candidature le {day}."
     msg = EmailMessage()
     msg["Subject"] = RECAP_SUBJECT
-    msg["From"] = E["SMTP_USER"]
+    msg["From"] = E.get("SMTP_FROM") or E["NOTIFY_TO"]
     msg["To"] = E["NOTIFY_TO"]
     msg.set_content(body)
     port = int(E.get("SMTP_PORT", 587))
@@ -169,9 +177,11 @@ def run_once(state):
         if cat != "autre":
             label = CATEGORIES[cat]
             if not dry:
-                target = folder(imap, label)
-                if imap.uid("copy", str(uid), target)[0] == "OK":
-                    imap.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
+                imap.uid("store", str(uid), "+FLAGS", f"({KEYWORDS[cat]})")
+                if E.get("MOVE_TO_FOLDER", "false").lower() == "true":
+                    target = folder(imap, label)
+                    if imap.uid("copy", str(uid), target)[0] == "OK":
+                        imap.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
             results.append([label, subject, sender, resume, conf])
         state["last_uid"] = uid
         save_state(state)
