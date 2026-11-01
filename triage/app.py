@@ -12,11 +12,15 @@ import re
 import smtplib
 import time
 import urllib.request
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 
 E = os.environ
 STATE_FILE = "/data/state.json"
+RECAP_SUBJECT = "RECAP CANDIDATURE DU JOUR"
+TZ = ZoneInfo(E.get("TZ", "Europe/Paris"))
 
 CATEGORIES = {
     "refus": "Stage - Refus",
@@ -114,14 +118,18 @@ def folder(imap, label):
     return f'"{name}"'
 
 
-def notify(results):
-    lines = [f"[{label}] {subject} - {sender}\n   {resume} (confiance {conf:.0%})"
-             for label, subject, sender, resume, conf in results]
+def send_recap(results, day):
+    if results:
+        lines = [f"[{label}] {subject} - {sender}\n   {resume} (confiance {conf:.0%})"
+                 for label, subject, sender, resume, conf in results]
+        body = f"{len(results)} réponse(s) de candidature le {day} :\n\n" + "\n\n".join(lines)
+    else:
+        body = f"Aucune nouvelle réponse de candidature le {day}."
     msg = EmailMessage()
-    msg["Subject"] = f"Tri candidatures : {len(results)} nouvelle(s) réponse(s)"
+    msg["Subject"] = RECAP_SUBJECT
     msg["From"] = E["SMTP_USER"]
     msg["To"] = E["NOTIFY_TO"]
-    msg.set_content("\n\n".join(lines))
+    msg.set_content(body)
     port = int(E.get("SMTP_PORT", 587))
     if port == 465:  # SSL direct
         conn = smtplib.SMTP_SSL(E["SMTP_HOST"], port)
@@ -143,11 +151,15 @@ def run_once(state):
     if "last_uid" not in state:  # premier lancement : on ne trie que le futur
         state["last_uid"] = max(uids, default=0)
         print(f"Initialisation, dernier UID = {state['last_uid']}")
-    results = []
+    results = state.setdefault("pending", [])
     for uid in (u for u in uids if u > state["last_uid"]):
         _, raw = imap.uid("fetch", str(uid), "(BODY.PEEK[])")  # PEEK : reste non lu
         msg = email.message_from_bytes(raw[0][1])
         sender, subject = dec(msg["From"]), dec(msg["Subject"])
+        if RECAP_SUBJECT in subject.upper():  # nos propres récaps : ignorés
+            state["last_uid"] = uid
+            save_state(state)
+            continue
         try:
             cat, conf, resume = classify(sender, subject, text_body(msg))
         except Exception as exc:
@@ -160,14 +172,18 @@ def run_once(state):
                 target = folder(imap, label)
                 if imap.uid("copy", str(uid), target)[0] == "OK":
                     imap.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
-            results.append((label, subject, sender, resume, conf))
+            results.append([label, subject, sender, resume, conf])
         state["last_uid"] = uid
         save_state(state)
     if not dry:
         imap.expunge()
     imap.logout()
-    if results:
-        notify(results)
+    now = datetime.now(TZ)
+    today = now.date().isoformat()
+    if now.hour >= int(E.get("RECAP_HOUR", 20)) and state.get("last_recap") != today:
+        send_recap(results, now.strftime("%d/%m/%Y"))
+        state["pending"] = []
+        state["last_recap"] = today
     save_state(state)
 
 
