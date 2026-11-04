@@ -18,6 +18,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from email.utils import getaddresses, parseaddr
 
 E = os.environ
 STATE_FILE = "/data/state.json"
@@ -41,6 +42,13 @@ KEYWORDS = {
 }
 PHISH_LABEL = "Phishing suspect"
 PHISH_KEYWORD = "$phishingsuspect"
+CHECK_LABEL = "À vérifier"
+# Messageries grand public : on retient l'adresse complète, pas le domaine
+WEBMAILS = {"gmail.com", "googlemail.com", "outlook.com", "outlook.fr", "hotmail.com", "hotmail.fr",
+            "live.com", "live.fr", "yahoo.com", "yahoo.fr", "icloud.com", "orange.fr", "wanadoo.fr",
+            "free.fr", "sfr.fr", "laposte.net", "gmx.fr", "gmx.com", "proton.me", "protonmail.com"}
+# Indices qu'un mail inconnu parle peut-être d'une candidature
+HINTS = re.compile(r"candidat|stage|stagiaire|internship|application|postul|entretien|interview|recrut", re.I)
 
 PROMPT = """Tu tries les mails reçus par un étudiant qui cherche un stage.
 Réponds UNIQUEMENT en JSON : {{"categorie": "...", "confiance": 0.0-1.0, "resume": "une phrase"}}
@@ -61,6 +69,68 @@ Corps :
 
 def dec(value):
     return str(make_header(decode_header(value or "")))
+
+
+def clean_subject(subject):
+    """Objet lisible pour le récap : sans "Objet :" en tête ni espaces en double."""
+    subject = re.sub(r"^\s*(objet|subject)\s*:\s*", "", subject, flags=re.I)
+    return re.sub(r"\s+", " ", subject).strip()
+
+
+def is_ignored(sender):
+    """Mail de la fac (cours, UniversiTICE...) : jamais une réponse de candidature.
+
+    IGNORE_SENDERS liste des morceaux d'adresse séparés par des virgules. Les mails envoyés
+    depuis ma propre adresse ne sont pas concernés (tests et démos).
+    """
+    addr = parseaddr(sender)[1].lower()
+    moi = my_addresses()
+    motifs = [m.strip().lower() for m in E.get("IGNORE_SENDERS", "univ-rouen.fr").split(",") if m.strip()]
+    return addr not in moi and any(m in addr for m in motifs)
+
+
+def my_addresses():
+    return {a.lower() for a in (E.get("IMAP_USER", ""), E.get("NOTIFY_TO", ""), E.get("SMTP_FROM", "")) if "@" in a}
+
+
+def contact_key(addr):
+    """Domaine de l'adresse, ou l'adresse complète pour une messagerie grand public."""
+    addr = addr.lower()
+    domain = addr.rpartition("@")[2]
+    return addr if domain in WEBMAILS else domain
+
+
+def load_whitelist(imap):
+    """Liste blanche tirée de mes envois rangés dans FOLDER_PARENT.
+
+    Renvoie (contacts, ids) : domaines ou adresses auxquels j'ai écrit, et Message-ID de mes envois
+    (pour reconnaître une réponse directe, quel que soit le domaine de l'expéditeur).
+    """
+    contacts, ids = set(), set()
+    if imap.select(f'"{E["FOLDER_PARENT"]}"', readonly=True)[0] != "OK":
+        return contacts, ids
+    _, data = imap.fetch("1:*", "(BODY.PEEK[HEADER.FIELDS (FROM TO CC MESSAGE-ID)])")
+    moi = my_addresses()
+    for item in data:
+        if not isinstance(item, tuple):
+            continue
+        h = email.message_from_bytes(item[1])
+        if parseaddr(h.get("From", ""))[1].lower() not in moi:
+            continue
+        for _, addr in getaddresses(h.get_all("To", []) + h.get_all("Cc", [])):
+            if "@" in addr and addr.lower() not in moi:
+                contacts.add(contact_key(addr))
+        if h.get("Message-ID"):
+            ids.add(h["Message-ID"].strip())
+    return contacts, ids
+
+
+def is_known(msg, sender, contacts, ids):
+    """Vrai si le mail vient d'un contact de candidature ou répond à l'un de mes envois."""
+    if contact_key(parseaddr(sender)[1]) in contacts:
+        return True
+    refs = (msg.get("In-Reply-To", "") + " " + msg.get("References", "")).split()
+    return any(r.strip() in ids for r in refs)
 
 
 def text_body(msg):
@@ -154,14 +224,32 @@ def move(imap, uid):
 
 
 def send_recap(results, day):
-    # les mails suspects en premier
-    results = sorted(results, key=lambda r: r[0] != PHISH_LABEL)
-    if results:
-        lines = [f"[{label}] {subject} - {sender}\n   {resume} (confiance {conf:.0%})"
-                 for label, subject, sender, resume, conf in results]
-        body = f"{len(results)} réponse(s) de candidature le {day} :\n\n" + "\n\n".join(lines)
+    def ligne(label, subject, sender, resume, conf):
+        fin = "" if label == CHECK_LABEL else f" (confiance {conf:.0%})"
+        return f"- {subject} - {sender}\n  {resume}{fin}"
+
+    phishing = [r for r in results if r[0] == PHISH_LABEL]
+    a_verifier = [r for r in results if r[0] == CHECK_LABEL]
+    reponses = [r for r in results if r[0] not in (PHISH_LABEL, CHECK_LABEL)]
+    parts = []
+    if phishing:
+        parts.append(f"!!! {len(phishing)} MAIL(S) DE PHISHING SUSPECT(S) - NE PAS CLIQUER !!!\n"
+                     "(laissés dans la boîte de réception, étiquette « Phishing suspect »)\n\n"
+                     + "\n\n".join(ligne(*r) for r in phishing))
+    if reponses:
+        parts.append(f"{len(reponses)} réponse(s) de candidature le {day}")
+        for label in CATEGORIES.values():  # ordre : refus, positif, relance, auto, attente
+            groupe = [r for r in reponses if r[0] == label]
+            if groupe:
+                parts.append(f"== {label} ({len(groupe)}) ==\n\n"
+                             + "\n\n".join(ligne(*r) for r in groupe))
     else:
-        body = f"Aucune nouvelle réponse de candidature le {day}."
+        parts.append(f"Aucune nouvelle réponse de candidature le {day}.")
+    if a_verifier:
+        parts.append(f"== À vérifier ({len(a_verifier)}) ==\n"
+                     "(expéditeur inconnu qui parle peut-être d'une candidature, non trié)\n\n"
+                     + "\n\n".join(ligne(*r) for r in a_verifier))
+    body = "\n\n\n".join(parts)
     msg = EmailMessage()
     msg["Subject"] = RECAP_SUBJECT
     msg["From"] = E.get("SMTP_FROM") or E["NOTIFY_TO"]
@@ -182,6 +270,10 @@ def run_once(state):
     dry = E.get("DRY_RUN", "true").lower() == "true"
     imap = imaplib.IMAP4_SSL(E["IMAP_HOST"], int(E.get("IMAP_PORT", 993)))
     imap.login(E["IMAP_USER"], E["IMAP_PASSWORD"])
+    contacts, ids = load_whitelist(imap)
+    if state.get("whitelist_size") != len(contacts):
+        print(f"Liste blanche : {len(contacts)} contact(s) de candidature, {len(ids)} envoi(s)")
+        state["whitelist_size"] = len(contacts)
     imap.select(E.get("IMAP_INBOX", "INBOX"))
     _, data = imap.uid("search", None, "ALL")
     uids = [int(u) for u in data[0].split()]
@@ -192,7 +284,7 @@ def run_once(state):
     for uid in (u for u in uids if u > state["last_uid"]):
         _, raw = imap.uid("fetch", str(uid), "(BODY.PEEK[])")  # PEEK : reste non lu
         msg = email.message_from_bytes(raw[0][1])
-        sender, subject = dec(msg["From"]), dec(msg["Subject"])
+        sender, subject = dec(msg["From"]), clean_subject(dec(msg["Subject"]))
         if RECAP_SUBJECT in subject.upper():  # nos propres récaps : ignorés
             state["last_uid"] = uid
             save_state(state)
@@ -206,6 +298,23 @@ def run_once(state):
             if not dry:  # étiqueté mais laissé dans la boîte de réception, jamais rangé
                 imap.uid("store", str(uid), "+FLAGS", f"({PHISH_KEYWORD})")
             results.append([PHISH_LABEL, subject, sender, f"NE PAS CLIQUER - {why}", score])
+            state["last_uid"] = uid
+            save_state(state)
+            continue
+        if is_ignored(sender):
+            print(f"UID {uid} -> ignoré (expéditeur de la fac) : {subject}")
+            state["last_uid"] = uid
+            save_state(state)
+            continue
+        own = parseaddr(sender)[1].lower() in my_addresses()  # mes tests et démos
+        if not own and not is_known(msg, sender, contacts, ids):
+            if HINTS.search(subject) or HINTS.search(body[:2000]):
+                # inconnu mais qui parle peut-être d'une candidature : signalé, pas touché
+                print(f"UID {uid} -> à vérifier (expéditeur inconnu) : {subject}")
+                results.append([CHECK_LABEL, subject, sender,
+                                "Expéditeur absent de mes candidatures, laissé dans la boîte de réception", 1.0])
+            else:
+                print(f"UID {uid} -> ignoré (sans rapport avec mes candidatures) : {subject}")
             state["last_uid"] = uid
             save_state(state)
             continue
