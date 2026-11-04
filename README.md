@@ -136,11 +136,6 @@ associée au mot-clé `$phishingsuspect`.
 - **Modifications ciblées** : seul le mail traité est déplacé (`MOVE` IMAP, ou `UID EXPUNGE`) ; aucune suppression globale.
 - **Boucle évitée** : les récapitulatifs envoyés par TriLama sont reconnus et ignorés.
 
-## Vidéo de démonstration
-
-`bash demo/lancer-demo.sh` enregistre la démo dans le webmail avec Playwright
-(envoi d'un faux refus, attente du tri, affichage du mail étiqueté) et produit `docs/demo.mp4`.
-
 ## Choix techniques
 
 - **Bibliothèque standard Python uniquement** pour `triage` (`imaplib`, `smtplib`, `urllib`, `zoneinfo`) : pas de dépendance à maintenir. Le détecteur, séparé, a ses propres dépendances (scikit-learn, FastAPI).

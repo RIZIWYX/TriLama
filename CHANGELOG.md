@@ -6,7 +6,6 @@
 - Liste blanche automatique : seuls sont triés les mails venant d'un domaine (ou d'une adresse, pour Gmail, Outlook…) auquel j'ai envoyé une candidature rangée dans « Candidatures stage », ou répondant directement à l'un de ces envois. Un expéditeur inconnu dont le mail parle de candidature ou de stage n'est pas trié mais apparaît dans la section « À vérifier » du récapitulatif ; les autres sont ignorés.
 - Récapitulatif en sections : alertes phishing en tête, puis réponses regroupées par catégorie, puis mails à vérifier ; le total ne compte que les réponses de candidature.
 - Objets nettoyés dans le récapitulatif (« Objet : » en tête, espaces en double).
-- Script `reparer.py` pour remettre dans la boîte de réception les mails de la fac rangés par erreur (simulation par défaut, `--appliquer` pour agir).
 
 ## v1.1.0 - 2026-11-02
 
